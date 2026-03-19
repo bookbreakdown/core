@@ -1,0 +1,189 @@
+<?php
+
+namespace TurnkeyAgentic\Core\Services;
+
+use CodeIgniter\CLI\CLI;
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Exception\ServerException;
+
+class OpenAIService
+{
+    private Client $client;
+    private string $apiKey;
+    private string $qaPrompt;
+    private array $knowledgeFiles;
+
+    private const RETRY_WAIT_SECONDS = 90;
+    private const MAX_RETRIES        = 3;
+
+    private array $lastRawResponse = [];
+
+    public function getLastRawResponse(): array
+    {
+        return $this->lastRawResponse;
+    }
+
+    public function __construct(?string $systemPrompt = null, array $knowledgeFiles = [])
+    {
+        $this->apiKey = getenv('OPENAI_API_KEY') ?: '';
+
+        if (empty($this->apiKey)) {
+            throw new \Exception('OPENAI_API_KEY environment variable is not set');
+        }
+
+        $this->client = new Client([
+            'base_uri' => 'https://api.openai.com/v1/',
+            'headers'  => [
+                'Content-Type'  => 'application/json',
+                'Authorization' => 'Bearer ' . $this->apiKey,
+            ],
+            'timeout' => 300,
+        ]);
+
+        $this->knowledgeFiles = $knowledgeFiles;
+
+        if ($systemPrompt !== null) {
+            $this->qaPrompt = $systemPrompt;
+        } else {
+            $this->loadQAPrompt();
+        }
+    }
+
+    private function loadQAPrompt(): void
+    {
+        $promptPath = APPPATH . '../prompts/qa_review.md';
+        if (file_exists($promptPath)) {
+            $this->qaPrompt = file_get_contents($promptPath);
+        } else {
+            $this->qaPrompt = file_get_contents(__DIR__ . '/../../../prompts/qa_review.md');
+        }
+    }
+
+    public function complete(string $systemPrompt, string $userMessage, string $model = 'gpt-4o', array $extraParams = [], ?string $context = null): array
+    {
+        $payload = array_merge([
+            'model'    => $model,
+            'messages' => [
+                ['role' => 'system', 'content' => $systemPrompt],
+                ['role' => 'user', 'content' => $userMessage],
+            ],
+        ], $extraParams);
+
+        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+            try {
+                $response = $this->client->post('chat/completions', ['json' => $payload]);
+                $data = json_decode($response->getBody()->getContents(), true);
+
+                $usage = $data['usage'] ?? [];
+                if (!empty($usage) && class_exists(\App\Services\AICostLogger::class)) {
+                    \App\Services\AICostLogger::log(
+                        'openai',
+                        $model,
+                        $context ?? 'book_workflow',
+                        (int) ($usage['prompt_tokens'] ?? 0),
+                        (int) ($usage['completion_tokens'] ?? 0)
+                    );
+                }
+
+                return [
+                    'success' => true,
+                    'text'    => $data['choices'][0]['message']['content'] ?? '',
+                    'usage'   => $usage,
+                    'error'   => '',
+                ];
+            } catch (ServerException $e) {
+                $statusCode = $e->getResponse()->getStatusCode();
+
+                if (in_array($statusCode, [429, 529], true) && $attempt < self::MAX_RETRIES) {
+                    if (is_cli()) {
+                        CLI::write("OpenAI overloaded ({$statusCode}). Waiting " . self::RETRY_WAIT_SECONDS . "s before retry {$attempt}/" . self::MAX_RETRIES . "...", 'yellow');
+                    }
+                    sleep(self::RETRY_WAIT_SECONDS);
+                    continue;
+                }
+
+                return [
+                    'success' => false,
+                    'text'    => '',
+                    'usage'   => [],
+                    'error'   => "API error (HTTP {$statusCode}, attempt {$attempt}/" . self::MAX_RETRIES . "): " . $e->getMessage(),
+                ];
+            } catch (RequestException $e) {
+                return [
+                    'success' => false,
+                    'text'    => '',
+                    'usage'   => [],
+                    'error'   => 'API request failed: ' . $e->getMessage(),
+                ];
+            }
+        }
+
+        return ['success' => false, 'text' => '', 'usage' => [], 'error' => 'All retry attempts exhausted.'];
+    }
+
+    public function reviewTranslation(string $sourceText, string $translatedText, array $canonPatches = []): array
+    {
+        $userMessage = '';
+        foreach ($this->knowledgeFiles as $slug => $content) {
+            $userMessage .= "# Knowledge File: {$slug}\n\n{$content}\n\n---\n\n";
+        }
+
+        $userMessage .= "# Source Text\n\n{$sourceText}\n\n---\n\n# Translation to Review\n\n{$translatedText}";
+
+        if (!empty($canonPatches)) {
+            $userMessage .= "\n\n---\n\n# Previously Applied Patches (Canon - Do Not Revisit)\n\n";
+            $userMessage .= "The following patches have already been applied and are locked as final. ";
+            $userMessage .= "Do not suggest reverting, undoing, or re-patching any text introduced by these changes.\n\n";
+            foreach ($canonPatches as $patch) {
+                $userMessage .= "- **{$patch['type']}**: \"{$patch['find']}\" -> \"{$patch['replace']}\"\n";
+            }
+        }
+
+        $result = $this->complete($this->qaPrompt, $userMessage, 'gpt-4o', [
+            'temperature'     => 0.1,
+            'response_format' => ['type' => 'json_object'],
+        ]);
+
+        if (!$result['success']) {
+            return [
+                'success'   => false,
+                'error'     => $result['error'],
+                'hard_pass' => false,
+                'ship'      => false,
+            ];
+        }
+
+        $parsed = json_decode($result['text'], true);
+        if (!$parsed) {
+            return [
+                'success'   => false,
+                'error'     => 'Invalid JSON response from OpenAI',
+                'hard_pass' => false,
+                'ship'      => false,
+            ];
+        }
+
+        $this->lastRawResponse = $parsed;
+
+        return [
+            'success'         => true,
+            'hard_pass'       => $parsed['hard_pass'] ?? false,
+            'blocked_reasons' => $parsed['blocked_reasons'] ?? [],
+            'patches'         => $parsed['patches'] ?? [],
+            'notes'           => $parsed['notes'] ?? [],
+            'ship'            => $parsed['ship'] ?? false,
+            'usage'           => $result['usage'],
+        ];
+    }
+
+    public function test(): bool
+    {
+        try {
+            $result = $this->complete('', 'Say "OK" if you can read this.', 'gpt-4o-mini');
+            return $result['success'] && !empty($result['text']);
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+}

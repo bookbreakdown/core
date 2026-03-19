@@ -1,0 +1,17 @@
+{
+    "name": "turnkeyagentic/core",
+    "description": "Shared CI4 core services and libraries",
+    "type": "library",
+    "version": "dev-main",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.2",
+        "codeigniter4/framework": "^4.7",
+        "guzzlehttp/guzzle": "^7.10"
+    },
+    "autoload": {
+        "psr-4": {
+            "TurnkeyAgentic\\Core\\": "src/"
+        }
+    }
+}
