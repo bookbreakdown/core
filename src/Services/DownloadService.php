@@ -52,6 +52,22 @@ class DownloadService
             ->setBody($content);
     }
 
+    /**
+     * Stream a file directly from Google Drive without a temporary disk write.
+     */
+    public function streamFromDrive(string $driveFileId, string $filename): ResponseInterface
+    {
+        $drive    = new GoogleDriveService();
+        $contents = $drive->downloadFile($driveFileId);
+        $safeName = $this->sanitizeFilename($filename) . '.pdf';
+
+        return response()
+            ->setHeader('Content-Type', 'application/pdf')
+            ->setHeader('Content-Disposition', 'attachment; filename="' . $safeName . '"')
+            ->setHeader('Content-Length', (string) strlen($contents))
+            ->setBody($contents);
+    }
+
     protected function sanitizeFilename(string $name): string
     {
         $name = preg_replace('/\.(pdf|txt|epub)$/i', '', $name);
