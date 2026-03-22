@@ -1,18 +1,19 @@
 {
     "name": "turnkeyagentic/core",
-    "description": "Shared CI4 core services and libraries",
+    "description": "TurnkeyAgentic shared core services - PdoDB, AI providers, storage",
     "type": "library",
-    "version": "dev-main",
-    "license": "proprietary",
+    "license": "MIT",
     "require": {
         "php": "^8.2",
         "codeigniter4/framework": "^4.7",
-        "guzzlehttp/guzzle": "^7.10",
-        "google/apiclient": "^2.0"
+        "google/apiclient": "^2.19",
+        "google/auth": "^1.50",
+        "guzzlehttp/guzzle": "^7.10"
     },
     "autoload": {
         "psr-4": {
             "TurnkeyAgentic\\Core\\": "src/"
         }
-    }
+    },
+    "minimum-stability": "stable"
 }
