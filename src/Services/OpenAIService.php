@@ -29,7 +29,7 @@ class OpenAIService
         $this->apiKey = getenv('OPENAI_API_KEY') ?: '';
 
         if (empty($this->apiKey)) {
-            throw new \Exception('OPENAI_API_KEY environment variable is not set');
+            throw new \RuntimeException('OPENAI_API_KEY environment variable is not set');
         }
 
         $this->client = new Client([
@@ -52,11 +52,18 @@ class OpenAIService
 
     private function loadQAPrompt(): void
     {
-        $promptPath = APPPATH . '../prompts/qa_review.md';
-        if (file_exists($promptPath)) {
-            $this->qaPrompt = file_get_contents($promptPath);
+        $appPath  = APPPATH . '../prompts/qa_review.md';
+        $corePath = __DIR__ . '/../../../prompts/qa_review.md';
+
+        if (file_exists($appPath)) {
+            $this->qaPrompt = file_get_contents($appPath);
+        } elseif (file_exists($corePath)) {
+            $this->qaPrompt = file_get_contents($corePath);
         } else {
-            $this->qaPrompt = file_get_contents(__DIR__ . '/../../../prompts/qa_review.md');
+            // No QA prompt file present — default to empty string.
+            // This allows non-QA consumers (e.g. classify()) to use the service
+            // without needing a qa_review.md file in the project.
+            $this->qaPrompt = '';
         }
     }
 
@@ -120,6 +127,82 @@ class OpenAIService
         }
 
         return ['success' => false, 'text' => '', 'usage' => [], 'error' => 'All retry attempts exhausted.'];
+    }
+
+    /**
+     * classify() — single-shot structured-output call for classification/extraction.
+     *
+     * Differences from complete():
+     *   - No internal retries (caller owns retry/fallback logic).
+     *   - Requests JSON mode (response_format: json_object) automatically.
+     *   - Returns raw JSON string alongside parsed array.
+     *   - Returns latency in milliseconds.
+     *   - Returns structured error details without throwing.
+     *   - Does not log cost (caller logs via ai_usage_log).
+     *
+     * @param  string      $prompt   Complete prompt; expected to include JSON output schema.
+     * @param  string|null $model    Model to use; defaults to gpt-4o.
+     * @param  array       $options  Extra API parameters (e.g. max_tokens, temperature).
+     * @return array{
+     *   success: bool,
+     *   rawJson: string,
+     *   parsed: array,
+     *   inputTokens: int,
+     *   outputTokens: int,
+     *   latencyMs: int,
+     *   error: string,
+     * }
+     */
+    public function classify(string $prompt, ?string $model = null, array $options = []): array
+    {
+        $resolvedModel = $model ?? 'gpt-4o';
+
+        $payload = array_merge([
+            'model'           => $resolvedModel,
+            'response_format' => ['type' => 'json_object'],
+            'messages'        => [
+                ['role' => 'system', 'content' => 'You are a structured data extraction engine. Respond only with valid JSON matching the schema in the prompt.'],
+                ['role' => 'user', 'content' => $prompt],
+            ],
+        ], array_diff_key($options, array_flip(['response_format'])));
+
+        $startMs = (int) round(microtime(true) * 1000);
+
+        try {
+            $response = $this->client->post('chat/completions', ['json' => $payload]);
+            $latencyMs = (int) round(microtime(true) * 1000) - $startMs;
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            $rawJson = $data['choices'][0]['message']['content'] ?? '';
+            $usage   = $data['usage'] ?? [];
+
+            return [
+                'success'      => true,
+                'rawJson'      => $rawJson,
+                'parsed'       => json_decode($rawJson, true) ?? [],
+                'inputTokens'  => (int) ($usage['prompt_tokens'] ?? 0),
+                'outputTokens' => (int) ($usage['completion_tokens'] ?? 0),
+                'latencyMs'    => $latencyMs,
+                'error'        => '',
+            ];
+        } catch (\Throwable $e) {
+            $latencyMs = (int) round(microtime(true) * 1000) - $startMs;
+            $statusCode = method_exists($e, 'getResponse') && $e->getResponse()
+                ? $e->getResponse()->getStatusCode()
+                : 0;
+
+            return [
+                'success'      => false,
+                'rawJson'      => '',
+                'parsed'       => [],
+                'inputTokens'  => 0,
+                'outputTokens' => 0,
+                'latencyMs'    => $latencyMs,
+                'error'        => $statusCode
+                    ? "HTTP {$statusCode}: " . $e->getMessage()
+                    : $e->getMessage(),
+            ];
+        }
     }
 
     public function reviewTranslation(string $sourceText, string $translatedText, array $canonPatches = []): array

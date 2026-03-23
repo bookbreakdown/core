@@ -22,7 +22,7 @@ class AnthropicService
         $this->apiKey = getenv('ANTHROPIC_API_KEY') ?: '';
 
         if (empty($this->apiKey)) {
-            throw new \Exception('ANTHROPIC_API_KEY environment variable is not set');
+            throw new \RuntimeException('ANTHROPIC_API_KEY environment variable is not set');
         }
 
         $this->client = new Client([
@@ -32,7 +32,7 @@ class AnthropicService
                 'x-api-key'         => $this->apiKey,
                 'anthropic-version' => '2023-06-01',
             ],
-            'timeout' => 10000,
+            'timeout' => 30,
         ]);
     }
 
@@ -109,6 +109,81 @@ class AnthropicService
             'usage'   => [],
             'error'   => 'All retry attempts exhausted.',
         ];
+    }
+
+    /**
+     * classify() — single-shot structured-output call for classification/extraction.
+     *
+     * Differences from complete():
+     *   - No internal retries (caller owns retry/fallback logic).
+     *   - Returns raw JSON string alongside parsed array.
+     *   - Returns latency in milliseconds.
+     *   - Returns structured error details without throwing.
+     *   - Does not log cost (caller logs via ai_usage_log).
+     *
+     * @param  string      $prompt   Complete prompt; expected to include JSON output schema.
+     * @param  string|null $model    Model to use; defaults to DEFAULT_MODEL.
+     * @param  array       $options  Extra API parameters (e.g. max_tokens, temperature).
+     * @return array{
+     *   success: bool,
+     *   rawJson: string,
+     *   parsed: array,
+     *   inputTokens: int,
+     *   outputTokens: int,
+     *   latencyMs: int,
+     *   error: string,
+     * }
+     */
+    public function classify(string $prompt, ?string $model = null, array $options = []): array
+    {
+        $resolvedModel = $model ?? self::DEFAULT_MODEL;
+
+        $payload = array_merge([
+            'model'      => $resolvedModel,
+            'max_tokens' => $options['max_tokens'] ?? 2000,
+            'system'     => 'You are a structured data extraction engine. Respond only with valid JSON matching the schema in the prompt. No prose, no markdown code fences.',
+            'messages'   => [
+                ['role' => 'user', 'content' => $prompt],
+            ],
+        ], array_diff_key($options, array_flip(['max_tokens'])));
+
+        $startMs = (int) round(microtime(true) * 1000);
+
+        try {
+            $response = $this->client->post('messages', ['json' => $payload]);
+            $latencyMs = (int) round(microtime(true) * 1000) - $startMs;
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            $rawJson = $data['content'][0]['text'] ?? '';
+            $usage   = $data['usage'] ?? [];
+
+            return [
+                'success'      => true,
+                'rawJson'      => $rawJson,
+                'parsed'       => json_decode($rawJson, true) ?? [],
+                'inputTokens'  => (int) ($usage['input_tokens'] ?? 0),
+                'outputTokens' => (int) ($usage['output_tokens'] ?? 0),
+                'latencyMs'    => $latencyMs,
+                'error'        => '',
+            ];
+        } catch (\Throwable $e) {
+            $latencyMs = (int) round(microtime(true) * 1000) - $startMs;
+            $statusCode = method_exists($e, 'getResponse') && $e->getResponse()
+                ? $e->getResponse()->getStatusCode()
+                : 0;
+
+            return [
+                'success'      => false,
+                'rawJson'      => '',
+                'parsed'       => [],
+                'inputTokens'  => 0,
+                'outputTokens' => 0,
+                'latencyMs'    => $latencyMs,
+                'error'        => $statusCode
+                    ? "HTTP {$statusCode}: " . $e->getMessage()
+                    : $e->getMessage(),
+            ];
+        }
     }
 
     public function chat(string $message): string
