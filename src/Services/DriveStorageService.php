@@ -110,6 +110,14 @@ class DriveStorageService
      */
     public function moveIn(string $sourcePath, string $relativePath): bool
     {
+        return $this->moveInAndGetId($sourcePath, $relativePath) !== null;
+    }
+
+    /**
+     * Upload a local file to Drive at relative path, returning the Drive file ID.
+     */
+    public function moveInAndGetId(string $sourcePath, string $relativePath): ?string
+    {
         [$folderKey, $filename] = $this->parsePath($relativePath);
         $folderId = $this->resolveOrCreateFolder($folderKey);
 
@@ -120,7 +128,8 @@ class DriveStorageService
 
         $file = $this->drive->uploadFile($filename, $sourcePath, $folderId);
 
-        return $file->getId() !== null;
+        $id = $file->getId();
+        return $id !== null && $id !== '' ? $id : null;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

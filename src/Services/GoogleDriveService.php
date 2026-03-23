@@ -32,6 +32,10 @@ class GoogleDriveService
             throw new \RuntimeException("Google Drive credentials file not found: {$this->credentialsPath}");
         }
 
+        if (!is_readable($this->credentialsPath)) {
+            throw new \RuntimeException("Google Drive credentials file is not readable: {$this->credentialsPath}");
+        }
+
         $this->sharedDriveId = $sharedDriveId ?? env('GOOGLE_DRIVE_SHARED_DRIVE_ID') ?: null;
         $this->rootFolderId  = $rootFolderId ?? env('GOOGLE_DRIVE_ROOT_FOLDER_ID') ?: null;
 
@@ -54,7 +58,13 @@ class GoogleDriveService
      */
     private function bootAuth(): void
     {
-        $json = json_decode((string) file_get_contents($this->credentialsPath), true);
+        $contents = file_get_contents($this->credentialsPath);
+
+        if ($contents === false) {
+            throw new \RuntimeException("Cannot read credentials file: {$this->credentialsPath}");
+        }
+
+        $json = json_decode($contents, true);
 
         if (!is_array($json)) {
             throw new \RuntimeException("Cannot parse credentials file: {$this->credentialsPath}");
@@ -77,7 +87,13 @@ class GoogleDriveService
             throw new \RuntimeException("OAuth client credentials not found: {$oauthClientPath}");
         }
 
-        $clientCreds = json_decode((string) file_get_contents($oauthClientPath), true);
+        $oauthContents = file_get_contents($oauthClientPath);
+
+        if ($oauthContents === false) {
+            throw new \RuntimeException("Cannot read OAuth client credentials: {$oauthClientPath}");
+        }
+
+        $clientCreds = json_decode($oauthContents, true);
         $installed   = $clientCreds['installed'] ?? $clientCreds['web'] ?? null;
 
         if ($installed === null) {
@@ -113,7 +129,12 @@ class GoogleDriveService
 
     public function getServiceAccountEmail(): ?string
     {
-        $decoded = json_decode((string) file_get_contents($this->credentialsPath), true);
+        $contents = file_get_contents($this->credentialsPath);
+        if ($contents === false) {
+            return null;
+        }
+
+        $decoded = json_decode($contents, true);
         if (!is_array($decoded)) {
             return null;
         }
@@ -191,14 +212,14 @@ class GoogleDriveService
     {
         $params = $this->applyDriveOptions([
             'fields' => 'id, name, mimeType, parents, webViewLink, webContentLink, size, createdTime',
-        ]);
+        ], false, false);
 
         return $this->drive->files->get($fileId, $params);
     }
 
     public function downloadFile(string $fileId): string
     {
-        $params   = $this->applyDriveOptions(['alt' => 'media']);
+        $params   = $this->applyDriveOptions(['alt' => 'media'], false, false);
         $response = $this->drive->files->get($fileId, $params);
 
         return (string) $response->getBody()->getContents();
@@ -275,11 +296,11 @@ class GoogleDriveService
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private function applyDriveOptions(array $params, bool $isWrite = false): array
+    private function applyDriveOptions(array $params, bool $isWrite = false, bool $isList = true): array
     {
         $params['supportsAllDrives'] = true;
 
-        if (!$isWrite) {
+        if (!$isWrite && $isList) {
             $params['includeItemsFromAllDrives'] = true;
 
             if ($this->sharedDriveId !== null) {
