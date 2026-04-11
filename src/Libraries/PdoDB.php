@@ -90,6 +90,26 @@ class PdoDB
         });
     }
 
+    public function beginTransaction(): bool
+    {
+        return $this->pdo->beginTransaction();
+    }
+
+    public function commit(): bool
+    {
+        return $this->pdo->commit();
+    }
+
+    public function rollBack(): bool
+    {
+        return $this->pdo->rollBack();
+    }
+
+    public function inTransaction(): bool
+    {
+        return $this->pdo->inTransaction();
+    }
+
     public function getByIndex(string $sql, string $index, array $params = [], bool $toupper = false): array
     {
         $results = $this->pdo($sql, $params);

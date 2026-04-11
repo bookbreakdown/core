@@ -84,6 +84,18 @@ class DriveStorageService
     }
 
     /**
+     * Download file contents from Drive by file ID (no path resolution needed).
+     */
+    public function getById(string $fileId): string|false
+    {
+        try {
+            return $this->drive->downloadFile($fileId);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
      * Delete file from Drive at relative path.
      */
     public function delete(string $relativePath): bool
