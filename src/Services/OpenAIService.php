@@ -52,10 +52,10 @@ class OpenAIService
 
     private function loadQAPrompt(): void
     {
-        $appPath  = APPPATH . '../prompts/qa_review.md';
+        $appPath  = defined('APPPATH') ? APPPATH . '../prompts/qa_review.md' : null;
         $corePath = __DIR__ . '/../../../prompts/qa_review.md';
 
-        if (file_exists($appPath)) {
+        if ($appPath !== null && file_exists($appPath)) {
             $this->qaPrompt = file_get_contents($appPath);
         } elseif (file_exists($corePath)) {
             $this->qaPrompt = file_get_contents($corePath);

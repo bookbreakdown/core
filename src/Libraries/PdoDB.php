@@ -9,13 +9,32 @@ class PdoDB
 {
     private PDO $pdo;
 
-    public function __construct()
+    /**
+     * PdoDB can be constructed in two ways:
+     *
+     *   1. With an existing PDO instance — preferred for Laravel / any host that
+     *      already has a configured connection. Pass `new PdoDB($pdo)`.
+     *   2. With no argument — legacy CI4 auto-connect path. Reads `\Config\Database`
+     *      and builds its own PDO.
+     *
+     * The auto-connect path is guarded by class_exists so hosts without CI4
+     * don't blow up on the `\Config\Database::connect()` call.
+     */
+    public function __construct(?PDO $pdo = null)
     {
+        if ($pdo !== null) {
+            $this->pdo = $pdo;
+            return;
+        }
         $this->connect();
     }
 
     private function connect(): void
     {
+        if (! class_exists('\\Config\\Database')) {
+            throw new \RuntimeException('PdoDB auto-connect requires CodeIgniter\'s \\Config\\Database. On non-CI hosts, inject a PDO instance into the constructor.');
+        }
+
         $db  = \Config\Database::connect();
         $dsn = "mysql:host={$db->hostname};dbname={$db->database};charset=utf8mb4";
 
@@ -29,7 +48,11 @@ class PdoDB
 
     private function reconnect(): void
     {
-        log_message('info', 'PdoDB: reconnecting...');
+        if (function_exists('log_message')) {
+            log_message('info', 'PdoDB: reconnecting...');
+        } else {
+            error_log('PdoDB: reconnecting...');
+        }
         $this->connect();
     }
 
@@ -51,12 +74,21 @@ class PdoDB
                 try {
                     return $run($this->pdo->prepare($sql), $params);
                 } catch (PDOException $e2) {
-                    log_message('error', 'PdoDB: retry failed - ' . $e2->getMessage() . ' | SQL: ' . $sql);
+                    $this->logError('PdoDB: retry failed - ' . $e2->getMessage() . ' | SQL: ' . $sql);
                     throw $e2;
                 }
             }
-            log_message('error', 'PdoDB: ' . $e->getMessage() . ' | SQL: ' . $sql);
+            $this->logError('PdoDB: ' . $e->getMessage() . ' | SQL: ' . $sql);
             throw $e;
+        }
+    }
+
+    private function logError(string $msg): void
+    {
+        if (function_exists('log_message')) {
+            log_message('error', $msg);
+        } else {
+            error_log($msg);
         }
     }
 
