@@ -2,7 +2,7 @@
 
 namespace TurnkeyAgentic\Core\Services;
 
-class DriveStorageService
+class DriveStorageService implements StorageDriverInterface
 {
     private GoogleDriveService $drive;
     private string $rootFolderId;
@@ -142,6 +142,23 @@ class DriveStorageService
 
         $id = $file->getId();
         return $id !== null && $id !== '' ? $id : null;
+    }
+
+    public function path(string $relativePath): string
+    {
+        return 'gdrive://' . $this->rootFolderId . '/' . ltrim($relativePath, '/');
+    }
+
+    public function size(string $relativePath): int|false
+    {
+        $content = $this->get($relativePath);
+        return $content !== false ? strlen($content) : false;
+    }
+
+    public function ensureDir(string $relativeDir): string
+    {
+        $this->resolveOrCreateFolder($relativeDir);
+        return $relativeDir;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

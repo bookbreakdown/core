@@ -2,7 +2,7 @@
 
 namespace TurnkeyAgentic\Core\Services;
 
-class StorageService
+class StorageService implements StorageDriverInterface
 {
     protected string $root;
 
@@ -77,6 +77,16 @@ class StorageService
             mkdir($full, 0755, true);
         }
         return $full;
+    }
+
+    public function moveInAndGetId(string $sourcePath, string $relativePath): ?string
+    {
+        return $this->moveIn($sourcePath, $relativePath) ? $relativePath : null;
+    }
+
+    public function getById(string $storageId): string|false
+    {
+        return $this->get($storageId);
     }
 
     public function root(): string

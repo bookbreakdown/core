@@ -6,11 +6,11 @@ use CodeIgniter\HTTP\ResponseInterface;
 
 class DownloadService
 {
-    protected StorageService $storage;
+    protected StorageDriverInterface $storage;
 
     public function __construct()
     {
-        $this->storage = new StorageService();
+        $this->storage = StorageFactory::default();
     }
 
     public function streamPdf(string $relativePath, string $filename): ResponseInterface
