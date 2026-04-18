@@ -14,6 +14,9 @@ class GoogleDriveService
     private ?string $sharedDriveId;
     private ?string $rootFolderId;
 
+    /** Separate OAuth-authenticated Drive instance for writes (consumer Gmail hybrid). */
+    private ?Drive $writeDrive = null;
+
     public function __construct(
         ?string $credentialsPath = null,
         ?string $sharedDriveId = null,
@@ -46,6 +49,11 @@ class GoogleDriveService
         $this->bootAuth();
 
         $this->drive = new Drive($this->client);
+
+        // Hybrid mode: if the primary credential is a service account and an
+        // OAuth write token exists, boot a separate client for write operations.
+        // Consumer Gmail SAs have zero storage quota and cannot create files.
+        $this->bootWriteClient();
     }
 
     // ── Auth ──────────────────────────────────────────────────────────────────
@@ -118,6 +126,72 @@ class GoogleDriveService
             $merged = array_merge($json, $refreshed);
             file_put_contents($this->credentialsPath, json_encode($merged, JSON_PRETTY_PRINT));
         }
+    }
+
+    /**
+     * If primary credentials are a service account, look for an OAuth write
+     * token at GOOGLE_DRIVE_WRITE_TOKEN_PATH. Service accounts on consumer
+     * Gmail have zero storage quota — writes must go through a user token.
+     */
+    private function bootWriteClient(): void
+    {
+        // Only needed when primary auth is a service account
+        $json = json_decode(file_get_contents($this->credentialsPath) ?: '', true);
+        if (!is_array($json) || ($json['type'] ?? '') !== 'service_account') {
+            return; // Primary is already OAuth — writes go through $this->drive
+        }
+
+        $writeTokenPath = env('GOOGLE_DRIVE_WRITE_TOKEN_PATH', '');
+        if ($writeTokenPath === '' || !is_file($writeTokenPath)) {
+            return; // No write token configured — writes will fail with quota error
+        }
+
+        $tokenJson = json_decode(file_get_contents($writeTokenPath) ?: '', true);
+        if (!is_array($tokenJson) || !isset($tokenJson['refresh_token'])) {
+            return;
+        }
+
+        $oauthClientPath = env('GOOGLE_OAUTH_CLIENT_PATH', '/home/ladieu/.config/google/oauth_client.json');
+        if (!is_file($oauthClientPath)) {
+            return;
+        }
+
+        $clientCreds = json_decode(file_get_contents($oauthClientPath) ?: '', true);
+        $installed   = $clientCreds['installed'] ?? $clientCreds['web'] ?? null;
+        if ($installed === null) {
+            return;
+        }
+
+        $writeClient = new Client();
+        $writeClient->setApplicationName('Book Breakdown Google Drive (write)');
+        $writeClient->setScopes([Drive::DRIVE]);
+        $writeClient->setClientId($installed['client_id']);
+        $writeClient->setClientSecret($installed['client_secret']);
+        $writeClient->setRedirectUri('urn:ietf:wg:oauth:2.0:oob');
+        $writeClient->setAccessToken($tokenJson);
+
+        if ($writeClient->isAccessTokenExpired()) {
+            $refreshed = $writeClient->fetchAccessTokenWithRefreshToken($tokenJson['refresh_token']);
+
+            if (isset($refreshed['error'])) {
+                return; // Token expired beyond refresh — fall back to SA (will fail on write)
+            }
+
+            $merged = array_merge($tokenJson, $refreshed);
+            file_put_contents($writeTokenPath, json_encode($merged, JSON_PRETTY_PRINT));
+            $writeClient->setAccessToken($merged);
+        }
+
+        $this->writeDrive = new Drive($writeClient);
+    }
+
+    /**
+     * Get the Drive instance for write operations.
+     * Returns the OAuth-backed instance if available, otherwise the primary.
+     */
+    private function getWriteDrive(): Drive
+    {
+        return $this->writeDrive ?? $this->drive;
     }
 
     // ── Introspection ─────────────────────────────────────────────────────────
@@ -243,7 +317,7 @@ class GoogleDriveService
             'fields' => 'id, name, mimeType, parents, webViewLink',
         ], true);
 
-        return $this->drive->files->create($metadata, $params);
+        return $this->getWriteDrive()->files->create($metadata, $params);
     }
 
     public function uploadText(string $name, string $content, ?string $parentId = null, string $mimeType = 'text/plain'): DriveFile
@@ -262,7 +336,7 @@ class GoogleDriveService
             'fields'     => 'id, name, mimeType, parents, webViewLink, webContentLink',
         ], true);
 
-        return $this->drive->files->create($metadata, $params);
+        return $this->getWriteDrive()->files->create($metadata, $params);
     }
 
     public function uploadFile(string $name, string $localPath, ?string $parentId = null, ?string $mimeType = null): DriveFile
@@ -285,13 +359,13 @@ class GoogleDriveService
             'fields'     => 'id, name, mimeType, parents, webViewLink, webContentLink',
         ], true);
 
-        return $this->drive->files->create($metadata, $params);
+        return $this->getWriteDrive()->files->create($metadata, $params);
     }
 
     public function deleteFile(string $fileId): void
     {
         $params = $this->applyDriveOptions([], true);
-        $this->drive->files->delete($fileId, $params);
+        $this->getWriteDrive()->files->delete($fileId, $params);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

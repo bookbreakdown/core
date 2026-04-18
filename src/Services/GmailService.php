@@ -30,15 +30,18 @@ class GmailService
     private Client $client;
     private Gmail  $gmail;
     private string $tokenPath;
+    private ?string $oauthClientPath;
 
     /** @var array<string,string>  labelName → labelId cache for this instance */
     private array $labelCache = [];
 
-    public function __construct(?string $tokenPath = null)
+    public function __construct(?string $tokenPath = null, ?string $oauthClientPath = null)
     {
         $this->tokenPath = $tokenPath
             ?? env('GOOGLE_APPLICATION_CREDENTIALS', '')
             ?: '';
+
+        $this->oauthClientPath = $oauthClientPath;
 
         if ($this->tokenPath === '') {
             throw new \RuntimeException('GmailService: GOOGLE_APPLICATION_CREDENTIALS is not set');
@@ -92,7 +95,8 @@ class GmailService
             );
         }
 
-        $oauthClientPath = env('GOOGLE_OAUTH_CLIENT_PATH', '/home/ladieu/.config/google/oauth_client.json');
+        $oauthClientPath = $this->oauthClientPath
+            ?? env('GOOGLE_OAUTH_CLIENT_PATH', '/home/ladieu/.config/google/oauth_client.json');
 
         if (!is_file($oauthClientPath)) {
             throw new \RuntimeException("GmailService: OAuth client file not found: {$oauthClientPath}");
@@ -159,7 +163,7 @@ class GmailService
     // ── Messages ──────────────────────────────────────────────────────────────
 
     /**
-     * List message IDs matching a Gmail search query.
+     * List message IDs matching a Gmail search query (single page).
      *
      * @return array<int, array{id: string, threadId: string}>  Both identifiers preserved.
      */
@@ -179,6 +183,53 @@ class GmailService
                 'threadId' => $m->getThreadId(),
             ];
         }
+
+        return $result;
+    }
+
+    /**
+     * List ALL message IDs matching a query, handling pagination automatically.
+     *
+     * @param callable|null $onPage  Optional callback(int $pageNum, int $totalSoFar) for progress reporting.
+     * @return array<int, array{id: string, threadId: string}>
+     */
+    public function listAllMessages(string $query, int $maxResults = 5000, ?callable $onPage = null): array
+    {
+        $result    = [];
+        $pageToken = null;
+        $page      = 0;
+
+        do {
+            $params = [
+                'q'          => $query,
+                'maxResults' => min(500, $maxResults - count($result)),
+            ];
+
+            if ($pageToken !== null) {
+                $params['pageToken'] = $pageToken;
+            }
+
+            $response  = $this->gmail->users_messages->listUsersMessages('me', $params);
+            $messages  = $response->getMessages() ?? [];
+            $pageToken = $response->getNextPageToken();
+            $page++;
+
+            foreach ($messages as $m) {
+                $result[] = [
+                    'id'       => $m->getId(),
+                    'threadId' => $m->getThreadId(),
+                ];
+
+                if (count($result) >= $maxResults) {
+                    break 2;
+                }
+            }
+
+            if ($onPage !== null) {
+                $onPage($page, count($result));
+            }
+
+        } while ($pageToken !== null && count($result) < $maxResults);
 
         return $result;
     }
@@ -232,6 +283,7 @@ class GmailService
                 'snippet'        => $msg->getSnippet() ?? '',
                 'internalDateMs' => (int) $msg->getInternalDate(),
                 'headers'        => $this->extractHeaders($msg->getPayload()),
+                'bodyText'       => $this->extractBody($msg->getPayload(), 'text/plain'),
             ];
         }
 
