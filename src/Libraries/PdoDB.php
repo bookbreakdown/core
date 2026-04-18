@@ -36,7 +36,8 @@ class PdoDB
         }
 
         $db  = \Config\Database::connect();
-        $dsn = "mysql:host={$db->hostname};dbname={$db->database};charset=utf8mb4";
+        $port = $db->port ?? 3306;
+        $dsn = "mysql:host={$db->hostname};port={$port};dbname={$db->database};charset=utf8mb4";
 
         $this->pdo = new PDO($dsn, $db->username, $db->password, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
