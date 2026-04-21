@@ -5,7 +5,6 @@ namespace TurnkeyAgentic\Core\Services;
 use Google\Client;
 use Google\Service\Gmail;
 use Google\Service\Gmail\Label;
-use Google\Service\Gmail\Message;
 use Google\Service\Gmail\ModifyMessageRequest;
 
 /**
@@ -293,35 +292,6 @@ class GmailService
             'snippet'   => $thread->getSnippet() ?? '',
             'historyId' => (string) $thread->getHistoryId(),
             'messages'  => $messages,
-        ];
-    }
-
-    // ── Send ─────────────────────────────────────────────────────────────────
-
-    /**
-     * Send a raw RFC 2822 message via the Gmail API.
-     *
-     * SCOPE: requires gmail.send or gmail.compose — gmail.modify is NOT sufficient.
-     *
-     * @param string      $rawMessage Base64url-encoded RFC 2822 message
-     * @param string|null $threadId   Optional thread ID for threading the reply
-     * @return array{id: string, threadId: string, labelIds: string[]}
-     */
-    public function sendRawMessage(string $rawMessage, ?string $threadId = null): array
-    {
-        $message = new Message();
-        $message->setRaw($rawMessage);
-
-        if ($threadId !== null) {
-            $message->setThreadId($threadId);
-        }
-
-        $sent = $this->gmail->users_messages->send('me', $message);
-
-        return [
-            'id'       => $sent->getId(),
-            'threadId' => $sent->getThreadId(),
-            'labelIds' => $sent->getLabelIds() ?? [],
         ];
     }
 
