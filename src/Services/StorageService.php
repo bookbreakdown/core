@@ -53,14 +53,12 @@ class StorageService implements StorageDriverInterface
 
     public function get(string $relativePath): string|false
     {
-        $full = $this->path($relativePath);
-        return is_file($full) ? file_get_contents($full) : false;
+        return file_get_contents($this->path($relativePath));
     }
 
     public function size(string $relativePath): int|false
     {
-        $full = $this->path($relativePath);
-        return is_file($full) ? filesize($full) : false;
+        return filesize($this->path($relativePath));
     }
 
     public function delete(string $relativePath): bool
