@@ -115,6 +115,11 @@ class PdoDB
         });
     }
 
+    public function insertEx(string $sql, array $params = []): string|false
+    {
+        return $this->ex($sql, $params);
+    }
+
     public function updateEx(string $sql, array $params = []): int
     {
         return $this->execute($sql, $params, function ($sth, $params) {
